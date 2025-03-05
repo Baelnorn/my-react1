@@ -1,94 +1,179 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
+import { collection, getDocs, setDoc, doc, deleteDoc } from 'firebase/firestore';
+import db from './firebaseConfig';
+import GameList from './components/GameList';
+import GameForm from './components/GameForm';
 import './App.css';
 
-function Greeting(props) {
-  const handleChange = (event) => {
-    props.onGreetingChange(props.name, event.target.value); // Immediate update
+const App = () => {
+  const [games, setGames] = useState([]);
+  const [currentGame, setCurrentGame] = useState({
+    id: '',
+    Name: '',
+    Rating: 0,
+    Release: '',
+    Description: '',
+    Screenshots: [],
+  });
+  const [newScreenshot, setNewScreenshot] = useState('');
+  const [view, setView] = useState('list');
+  const [screenshotIndices, setScreenshotIndices] = useState({});
+  const [isEdit, setIsEdit] = useState(false);
+  const [sortBy, setSortBy] = useState('date'); // New: 'date' or 'rating'
+  const [reverseOrder, setReverseOrder] = useState(false); // New: true/false
+
+  const fetchGames = async () => {
+    try {
+      const gamesCollection = collection(db, 'Gameslist');
+      const snapshot = await getDocs(gamesCollection);
+      const gameData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setGames(gameData);
+      setScreenshotIndices(gameData.reduce((acc, game) => {
+        acc[game.id] = 0;
+        return acc;
+      }, {}));
+    } catch (error) {
+      console.error('Error fetching games:', error);
+    }
   };
-
-  const displayGreeting = props.admin
-    ? props.sharedGreeting
-    : props.localGreetings[props.name] !== null
-    ? props.localGreetings[props.name]
-    : props.sharedGreeting;
-
-  return (
-    <div>
-      <h1>{props.greeting}, {props.name}!</h1>
-      <p>Custom Greeting: {displayGreeting || 'None yet'}</p>
-      <input
-        value={displayGreeting || ''} // Use display value directly
-        onChange={handleChange}
-        placeholder="Type a new greeting"
-      />
-      <p>Welcome to React.</p>
-    </div>
-  );
-}
-
-function App() {
-  const people = [
-    { id: 1, name: 'Alex', greeting: 'Hi', admin: true },
-    { id: 2, name: 'Sam', greeting: 'Hola' },
-    { id: 3, name: 'Taylor', greeting: 'Hey', admin: false },
-    { id: 4, name: 'Emil', greeting: 'Ahoy', admin: false },
-  ];
-
-  const initialLocalGreetings = people.reduce((acc, person) => {
-    if (!person.admin) acc[person.name] = null;
-    return acc;
-  }, {});
-
-  const [sharedGreeting, setSharedGreeting] = useState('');
-  const [localGreetings, setLocalGreetings] = useState(initialLocalGreetings);
-  const [log, setLog] = useState([]);
-  const lastLogTimer = useRef(null); // For debouncing log
-
-  const handleGreetingChange = (name, value) => {
-    const isAdmin = people.find(p => p.name === name).admin;
-    if (isAdmin) {
-      setSharedGreeting(value);
-      setLocalGreetings(initialLocalGreetings); // Reset non-admins
+  
+  const setEditGame = (game) => {
+    if (game) {
+      setCurrentGame(game);
+      setIsEdit(true);
     } else {
-      setLocalGreetings((prev) => ({ ...prev, [name]: value }));
+      resetForm();
     }
-
-    // Debounced logging
-    if (lastLogTimer.current) clearTimeout(lastLogTimer.current);
-    lastLogTimer.current = setTimeout(() => {
-      const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false });
-      const logEntry = `[${timestamp}] User ${name} changed greeting as follows: ${people.map(p => `${p.name}="${p.admin ? sharedGreeting : localGreetings[p.name] || sharedGreeting || 'None'}"`).join(', ')}`;
-      setLog((prevLog) => [...prevLog, logEntry]);
-    }, 2000);
+    setView('form');
   };
 
-  // Initial render skip (optional, if still needed)
-  const isInitialMount = useRef(true);
-  useEffect(() => {
-    if (isInitialMount.current) {
-      isInitialMount.current = false;
+  const deleteGame = async (id) => {
+    try {
+      await deleteDoc(doc(db, 'Gameslist', id));
+      setGames(games.filter(game => game.id !== id));
+    } catch (error) {
+      console.error('Error deleting game:', error);
     }
+  };
+
+  const saveGame = async (e) => {
+    e.preventDefault();
+    try {
+      const gameData = { ...currentGame, id: currentGame.Name };
+      await setDoc(doc(db, 'Gameslist', gameData.Name), gameData);
+      setGames(prev => isEdit ? prev.map(g => g.id === gameData.id ? gameData : g) : [...prev, gameData]);
+      resetForm();
+      setView('list');
+    } catch (error) {
+      console.error('Error saving game:', error);
+    }
+  };
+  
+  const resetForm = () => {
+    setCurrentGame({
+      id: '',
+      Name: '',
+      Rating: 0,
+      Release: '',
+      Description: '',
+      Screenshots: [],
+    });
+    setNewScreenshot('');
+    setIsEdit(false);
+  };
+
+  const currentScreenshot = (game) => {
+    return game.Screenshots[screenshotIndices[game.id]];
+  };
+
+  const addScreenshot = () => {
+    if (newScreenshot.trim()) {
+      setCurrentGame(prev => ({
+        ...prev,
+        Screenshots: [...prev.Screenshots, newScreenshot.trim()],
+      }));
+      setNewScreenshot('');
+    }
+  };
+
+  const editScreenshot = (index) => {
+    const newUrl = prompt('Enter new URL:', currentGame.Screenshots[index]);
+    if (newUrl) {
+      setCurrentGame(prev => {
+        const newScreenshots = [...prev.Screenshots];
+        newScreenshots[index] = newUrl;
+        return { ...prev, Screenshots: newScreenshots };
+      });
+    }
+  };
+
+  const deleteScreenshot = (index) => {
+    setCurrentGame(prev => ({
+      ...prev,
+      Screenshots: prev.Screenshots.filter((_, i) => i !== index),
+    }));
+  };
+
+  useEffect(() => {
+    fetchGames();
   }, []);
 
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setScreenshotIndices(prev => {
+        const newIndices = { ...prev };
+        games.forEach(game => {
+          if (game.Screenshots && game.Screenshots.length > 1) {
+            newIndices[game.id] = (newIndices[game.id] + 1) % game.Screenshots.length;
+          }
+        });
+        return newIndices;
+      });
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [games]);
+
+  const renderView = () => {
+    switch (view) {
+      case 'list':
+        return (
+          <GameList
+            games={games}
+            screenshotIndices={screenshotIndices}
+            currentScreenshot={currentScreenshot}
+            deleteGame={deleteGame}
+            setEditGame={setEditGame}
+            sortBy={sortBy}              // New prop
+            setSortBy={setSortBy}        // New prop
+            reverseOrder={reverseOrder}  // New prop
+            setReverseOrder={setReverseOrder} // New prop
+          />
+        );
+      case 'form':
+        return (
+          <GameForm
+            currentGame={currentGame}
+            setCurrentGame={setCurrentGame}
+            newScreenshot={newScreenshot}
+            setNewScreenshot={setNewScreenshot}
+            isEdit={isEdit}
+            saveGame={saveGame}
+            addScreenshot={addScreenshot}
+            editScreenshot={editScreenshot}
+            deleteScreenshot={deleteScreenshot}
+            cancelForm={() => { resetForm(); setView('list'); }}
+          />
+        );
+      default:
+        return <div>View not found</div>; // Fallback for unknown views
+    }
+  };
+
   return (
-    <div className="App">
-      {people.map((person) => (
-        <Greeting
-          key={person.id}
-          name={person.name}
-          greeting={person.greeting}
-          admin={person.admin}
-          sharedGreeting={sharedGreeting}
-          localGreetings={localGreetings}
-          onGreetingChange={handleGreetingChange}
-        />
-      ))}
-      <div className="log-area">
-        <h2>Change Log</h2>
-        <pre>{log.join('\n')}</pre>
-      </div>
+    <div id="app">
+      {renderView()}
     </div>
   );
-}
+};
 
 export default App;
